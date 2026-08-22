@@ -6,6 +6,7 @@ from fastapi_jobs.backends.base import JobBackend
 from fastapi_jobs.backends.sqlite import SQLiteBackend
 from fastapi_jobs.config import JobsConfig
 from fastapi_jobs.manager import JobManager, set_current_manager
+from fastapi_jobs.router import ApiConfig, build_router
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -36,6 +37,7 @@ class Jobs:
         default_timeout: float = 300.0,
         lease_buffer: float = 30.0,
         poll_interval: float = 1.0,
+        api: ApiConfig | bool | None = None,
     ) -> None:
         self.config = JobsConfig(
             database=database,
@@ -47,3 +49,9 @@ class Jobs:
         self.manager = JobManager(self.backend, self.config)
         self.app = app
         set_current_manager(self.manager)
+
+        if api:
+            if app is None:
+                raise ValueError("api was requested but no FastAPI app was passed to Jobs()")
+            router_config = api if isinstance(api, ApiConfig) else ApiConfig()
+            app.include_router(build_router(self.manager, router_config))
