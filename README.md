@@ -1,5 +1,9 @@
 # fastapi-jobs
 
+[![PyPI version](https://img.shields.io/pypi/v/fastapi-jobs.svg)](https://pypi.org/project/fastapi-jobs/)
+[![Python versions](https://img.shields.io/pypi/pyversions/fastapi-jobs.svg)](https://pypi.org/project/fastapi-jobs/)
+[![License: MIT](https://img.shields.io/pypi/l/fastapi-jobs.svg)](https://github.com/stackadnan/fastapi-jobs/blob/main/LICENSE)
+
 A lightweight, FastAPI-native background job system for the space between FastAPI's built-in `BackgroundTasks` and Celery.
 
 `BackgroundTasks` is great for simple fire-and-forget work, while Celery can introduce more infrastructure than a small FastAPI project needs. `fastapi-jobs` aims to provide the middle ground.
@@ -165,12 +169,13 @@ Jobs that are already being executed cannot currently be cancelled.
 
 ## Current Status
 
-`fastapi-jobs` is under active development.
+`fastapi-jobs` is published on PyPI and under active development.
 
 Currently implemented:
 
 * Task registration
 * Job enqueueing
+* Delayed job scheduling (`enqueue(..., delay=...)`)
 * SQLite backend
 * Polling worker
 * Job leasing
@@ -180,14 +185,14 @@ Currently implemented:
 * Retry handling
 * Exponential backoff
 * Basic cancellation for pending jobs
+* Optional REST API for job inspection and cancellation (`Jobs(app, api=True)`)
 
 Not implemented yet:
 
 * Redis backend
-* Optional FastAPI job router
 * Web dashboard
-* Advanced job scheduling
 * Cron-style recurring jobs
+* Cancellation of jobs that are already running
 
 ## Requirements
 
@@ -247,14 +252,14 @@ The project aims to remain:
 
 * [ ] Redis backend
 * [ ] PostgreSQL backend
-* [ ] Job status API
-* [ ] Job cancellation
-* [ ] Job scheduling
+* [x] Job status API (opt-in REST endpoints)
+* [x] Job cancellation (jobs that haven't started running)
+* [x] Delayed job scheduling
 * [ ] Recurring jobs
 * [ ] Web dashboard
 * [ ] Multiple worker support improvements
 * [ ] Dead-letter jobs
-* [ ] Job result storage
+* [x] Job result storage
 * [ ] Metrics and observability
 * [ ] Production deployment documentation
 
