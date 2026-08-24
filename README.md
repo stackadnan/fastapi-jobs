@@ -51,9 +51,7 @@ async def send_email(user_id: int) -> None:
 async def welcome(user_id: int):
     job = await send_email.enqueue(user_id)
 
-    return {
-        "job_id": job.id
-    }
+    return {"job_id": job.id}
 ```
 
 ## Running the Worker
@@ -68,15 +66,11 @@ import asyncio
 from fastapi_jobs import Jobs, Worker
 
 
-jobs = Jobs(
-    database="sqlite:///jobs.db"
-)
+jobs = Jobs(database="sqlite:///jobs.db")
 
 
 if __name__ == "__main__":
-    asyncio.run(
-        Worker(jobs.manager).run()
-    )
+    asyncio.run(Worker(jobs.manager).run())
 ```
 
 Run the worker:
@@ -145,8 +139,7 @@ Tasks can define the number of retries:
 
 ```python
 @task(retries=3)
-async def send_email(user_id: int):
-    ...
+async def send_email(user_id: int): ...
 ```
 
 When a task fails, the worker retries it using exponential backoff.
@@ -159,8 +152,7 @@ Tasks can also define a timeout:
 
 ```python
 @task(timeout=60)
-async def generate_report(report_id: int):
-    ...
+async def generate_report(report_id: int): ...
 ```
 
 If the task exceeds the configured timeout, the worker terminates the attempt and handles it according to the job's retry configuration.
