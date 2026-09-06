@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an addition or change to fastapi-jobs
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Before requesting a feature, check the README's Roadmap and "Not implemented
+        yet" sections -- it may already be a known, planned gap (Redis backend, cron
+        scheduling, and a web dashboard are tracked there, not forgotten).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that fastapi-jobs doesn't support today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the API or behavior look like? Code sketches welcome.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you're using today, or other approaches you considered.
