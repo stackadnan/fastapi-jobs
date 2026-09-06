@@ -13,7 +13,7 @@ from fastapi_jobs.models import Job, JobStatus, RetryPolicy
 from fastapi_jobs.router import ApiConfig
 from fastapi_jobs.worker import Worker
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ApiConfig",

@@ -16,11 +16,14 @@ A lightweight, FastAPI-native background job system for the space between FastAP
 * Task registration
 * Job enqueueing
 * Separate worker process
+* Configurable worker concurrency
 * Configurable retries
 * Exponential backoff
 * Task timeouts
 * Crash recovery through lease expiry
 * At-least-once delivery semantics
+* Cancellation of running jobs
+* Completed-job retention and cleanup
 * Lightweight architecture
 
 ## Quick Start
@@ -88,6 +91,16 @@ You can then run your FastAPI application normally:
 ```bash
 uvicorn main:app --reload
 ```
+
+### Concurrency
+
+By default a worker runs one job at a time. Pass `max_concurrency` to let it hold several jobs in flight:
+
+```python
+Worker(jobs.manager, max_concurrency=4)
+```
+
+The worker keeps claiming jobs up to that limit, so a slow job no longer blocks everything else queued behind it. `max_concurrency` must be at least 1; the default of 1 matches the previous single-job behavior, so existing code that doesn't pass it is unaffected.
 
 ## How It Works
 
@@ -161,11 +174,50 @@ async def generate_report(report_id: int): ...
 
 If the task exceeds the configured timeout, the worker terminates the attempt and handles it according to the job's retry configuration.
 
+## Retention
+
+By default, completed jobs (`SUCCESS`, `FAILED`, `CANCELLED`) are kept forever. For a long-running process this means the database grows without bound.
+
+Retention is opt-in. Pass `retention` to a worker to have it periodically delete terminal jobs older than that:
+
+```python
+from datetime import timedelta
+
+worker = Worker(
+    jobs.manager,
+    retention=timedelta(days=7),
+    retention_check_interval=3600,  # how often to check, in seconds (default: hourly)
+)
+```
+
+PENDING, RETRYING, and RUNNING jobs are never purged, regardless of age. Upgrading to a version of `fastapi-jobs` that supports retention does not start deleting anything on its own -- it only runs if you explicitly configure it.
+
+If you'd rather control cleanup yourself (a cron job, a management command, a different schedule per environment), call the backend directly instead of configuring it on a `Worker`:
+
+```python
+deleted = await jobs.backend.purge_jobs(older_than=timedelta(days=7))
+```
+
 ## Cancellation
 
-Currently, cancellation is supported only for jobs that have not started running.
+A PENDING or RETRYING job is cancelled immediately:
 
-Jobs that are already being executed cannot currently be cancelled.
+```python
+job = await manager.cancel(job_id)
+# job.status is JobStatus.CANCELLED
+```
+
+A RUNNING job is cancelled cooperatively. Calling `cancel()` on it flags the job and returns right away with the job still shown as RUNNING:
+
+```python
+job = await manager.cancel(job_id)
+# job.status is still JobStatus.RUNNING
+# job.cancel_requested_at is now set
+```
+
+The worker holding that job's lease notices the flag on its next poll, cancels its local `asyncio.Task`, and the job settles into `CANCELLED` once that unwinds -- typically within one `poll_interval`. Poll `manager.get(job_id)` (or `GET /jobs/{id}` if the REST API is mounted) to see it land. A cancelled job is never retried, no matter how many retries it had left.
+
+This only interrupts an `await` inside the task -- an `async def` task cancels as soon as it next hits one. A sync task, which runs in a worker thread via `asyncio.to_thread`, cannot be forcibly stopped: cancelling it marks the job `CANCELLED` right away, but the thread itself keeps running the function to completion in the background, since Python has no safe way to kill a running thread. Write sync tasks that either finish quickly or check for cancellation themselves if this matters for your use case.
 
 ## Current Status
 
@@ -177,14 +229,15 @@ Currently implemented:
 * Job enqueueing
 * Delayed job scheduling (`enqueue(..., delay=...)`)
 * SQLite backend
-* Polling worker
+* Polling worker with configurable concurrency (`max_concurrency`)
 * Job leasing
 * Lease expiry
 * Crash recovery
 * Task timeouts
 * Retry handling
 * Exponential backoff
-* Basic cancellation for pending jobs
+* Cancellation of pending jobs (immediate) and running jobs (cooperative)
+* Completed-job retention and cleanup, opt-in via `Worker(retention=...)` or `backend.purge_jobs()`
 * Optional REST API for job inspection and cancellation (`Jobs(app, api=True)`)
 
 Not implemented yet:
@@ -192,7 +245,6 @@ Not implemented yet:
 * Redis backend
 * Web dashboard
 * Cron-style recurring jobs
-* Cancellation of jobs that are already running
 
 ## Requirements
 
@@ -253,11 +305,12 @@ The project aims to remain:
 * [ ] Redis backend
 * [ ] PostgreSQL backend
 * [x] Job status API (opt-in REST endpoints)
-* [x] Job cancellation (jobs that haven't started running)
+* [x] Job cancellation (pending jobs immediately, running jobs cooperatively)
 * [x] Delayed job scheduling
+* [x] Configurable worker concurrency
+* [x] Job retention and cleanup
 * [ ] Recurring jobs
 * [ ] Web dashboard
-* [ ] Multiple worker support improvements
 * [ ] Dead-letter jobs
 * [x] Job result storage
 * [ ] Metrics and observability
