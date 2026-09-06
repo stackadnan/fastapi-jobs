@@ -56,6 +56,8 @@ class Worker:
         worker_id: str | None = None,
         poll_interval: float | None = None,
         max_concurrency: int = 1,
+        retention: timedelta | None = None,
+        retention_check_interval: float = 3600.0,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be >= 1")
@@ -65,7 +67,12 @@ class Worker:
             poll_interval if poll_interval is not None else manager.config.poll_interval
         )
         self.max_concurrency = max_concurrency
+        # Opt-in: unset by default so upgrading to a version with retention support
+        # doesn't start deleting historical jobs out from under an existing app.
+        self.retention = retention
+        self.retention_check_interval = retention_check_interval
         self._shutdown = asyncio.Event()
+        self._last_purge = time.monotonic()
 
     def request_shutdown(self) -> None:
         self._shutdown.set()
@@ -82,6 +89,7 @@ class Worker:
             while not self._shutdown.is_set():
                 await self._claim_up_to_capacity(running)
                 await self._apply_cancellation_requests(running)
+                await self._maybe_purge()
 
                 if not running:
                     await self._wait_or_shutdown(self.poll_interval)
@@ -118,6 +126,19 @@ class Worker:
             job = await self.manager.backend.get_job(job_id)
             if job is not None and job.status is JobStatus.RUNNING and job.cancel_requested_at:
                 job_task.cancel()
+
+    async def _maybe_purge(self) -> None:
+        if self.retention is None:
+            return
+        now = time.monotonic()
+        if now - self._last_purge < self.retention_check_interval:
+            return
+        self._last_purge = now
+        deleted = await self.manager.backend.purge_jobs(older_than=self.retention)
+        if deleted:
+            logger.info(
+                "purged completed jobs", extra={"worker_id": self.worker_id, "count": deleted}
+            )
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()

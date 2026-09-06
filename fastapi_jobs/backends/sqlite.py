@@ -10,7 +10,7 @@ from typing import Any
 import aiosqlite
 
 from fastapi_jobs.exceptions import InvalidJobStateError, JobNotFoundError
-from fastapi_jobs.models import Job, JobStatus
+from fastapi_jobs.models import TERMINAL_STATUSES, Job, JobStatus
 from fastapi_jobs.serialization import decode_payload, decode_result
 
 _SCHEMA = """
@@ -37,6 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_task_name ON jobs (task_name);
 """
 
 _CLAIMABLE_STATUSES = (JobStatus.PENDING.value, JobStatus.RETRYING.value)
+_TERMINAL_STATUS_VALUES = tuple(status.value for status in TERMINAL_STATUSES)
 
 
 def _parse_sqlite_url(url: str) -> str:
@@ -328,6 +329,21 @@ class SQLiteBackend:
             )
             rows = await cursor.fetchall()
         return [self._row_to_job(row) for row in rows]
+
+    async def purge_jobs(self, *, older_than: timedelta) -> int:
+        await self.initialize()
+        cutoff = _iso(datetime.now(UTC) - older_than)
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                f"""
+                DELETE FROM jobs
+                WHERE status IN ({",".join("?" * len(_TERMINAL_STATUS_VALUES))})
+                  AND finished_at IS NOT NULL
+                  AND finished_at < ?
+                """,
+                (*_TERMINAL_STATUS_VALUES, cutoff),
+            )
+        return cursor.rowcount
 
     async def _raise_stale_write(self, job_id: str) -> None:
         job = await self.get_job(job_id)

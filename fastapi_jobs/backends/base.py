@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from fastapi_jobs.models import Job, JobStatus
@@ -67,3 +67,11 @@ class JobBackend(Protocol):
         limit: int = 50,
         offset: int = 0,
     ) -> list[Job]: ...
+
+    async def purge_jobs(self, *, older_than: timedelta) -> int:
+        """Delete terminal (SUCCESS/FAILED/CANCELLED) jobs that finished before the cutoff.
+
+        Never touches PENDING, RETRYING, or RUNNING jobs. Returns the number of rows
+        deleted.
+        """
+        ...

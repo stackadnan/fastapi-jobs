@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi_jobs.decorators import task
 from fastapi_jobs.manager import JobManager
@@ -125,3 +125,47 @@ async def test_worker_fails_jobs_for_tasks_it_has_no_code_for(manager: JobManage
 
     assert finished.status.value == "FAILED"
     assert finished.error is not None and "not_a_real_task" in finished.error
+
+
+async def test_worker_does_not_purge_by_default(manager: JobManager):
+    @task
+    async def noop() -> None:
+        pass
+
+    job = await noop.enqueue()
+    worker = Worker(manager, poll_interval=0.02)
+
+    finished = await _run_until_terminal(worker, manager, job.id)
+
+    assert finished.status.value == "SUCCESS"
+    assert await manager.backend.get_job(job.id) is not None
+
+
+async def test_worker_purges_old_jobs_when_retention_is_configured(manager: JobManager):
+    @task
+    async def noop() -> None:
+        pass
+
+    job = await noop.enqueue()
+    setup_worker = Worker(manager, poll_interval=0.02)
+    finished = await _run_until_terminal(setup_worker, manager, job.id)
+    assert finished.status.value == "SUCCESS"
+
+    purging_worker = Worker(
+        manager,
+        poll_interval=0.02,
+        retention=timedelta(seconds=0),
+        retention_check_interval=0.0,
+    )
+    run = asyncio.create_task(purging_worker.run())
+    try:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if await manager.backend.get_job(job.id) is None:
+                break
+            await asyncio.sleep(0.02)
+        else:
+            raise AssertionError("job was never purged")
+    finally:
+        purging_worker.request_shutdown()
+        await asyncio.wait_for(run, timeout=2.0)
