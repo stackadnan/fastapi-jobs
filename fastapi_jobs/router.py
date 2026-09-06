@@ -47,6 +47,7 @@ class JobOut(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    cancel_requested_at: datetime | None
 
     @classmethod
     def from_job(cls, job: Job) -> JobOut:
@@ -68,6 +69,7 @@ class JobOut(BaseModel):
             created_at=job.created_at,
             started_at=job.started_at,
             finished_at=job.finished_at,
+            cancel_requested_at=job.cancel_requested_at,
         )
 
 

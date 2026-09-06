@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from fastapi_jobs.decorators import task
-from fastapi_jobs.exceptions import InvalidJobStateError, JobAlreadyCompletedError, JobNotFoundError
+from fastapi_jobs.exceptions import JobAlreadyCompletedError, JobNotFoundError
 from fastapi_jobs.manager import JobManager
 from fastapi_jobs.models import JobStatus
 
@@ -46,7 +46,7 @@ async def test_cancel_pending_job_succeeds(manager: JobManager):
     assert cancelled.status is JobStatus.CANCELLED
 
 
-async def test_cancel_running_job_raises_invalid_state(manager: JobManager):
+async def test_cancel_running_job_requests_cooperative_cancellation(manager: JobManager):
     @task
     async def do_nothing() -> None:
         pass
@@ -54,8 +54,14 @@ async def test_cancel_running_job_raises_invalid_state(manager: JobManager):
     job = await do_nothing.enqueue()
     await manager.backend.claim_job("worker-1", lease_buffer_seconds=30)
 
-    with pytest.raises(InvalidJobStateError):
-        await manager.cancel(job.id)
+    result = await manager.cancel(job.id)
+
+    # Nothing can forcibly stop a running task from the outside -- cancelling it
+    # flags the job and returns immediately. The worker holding its lease is what
+    # actually cancels the task and settles the job into CANCELLED; see
+    # tests/integration/test_cancellation.py for that end-to-end path.
+    assert result.status is JobStatus.RUNNING
+    assert result.cancel_requested_at is not None
 
 
 async def test_cancel_terminal_job_raises_already_completed(manager: JobManager):

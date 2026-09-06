@@ -15,21 +15,22 @@ from fastapi_jobs.serialization import decode_payload, decode_result
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
-    id               TEXT PRIMARY KEY,
-    task_name        TEXT NOT NULL,
-    status           TEXT NOT NULL,
-    payload          TEXT NOT NULL,
-    result           TEXT,
-    error            TEXT,
-    attempts         INTEGER NOT NULL DEFAULT 0,
-    max_attempts     INTEGER NOT NULL,
-    timeout_seconds  REAL NOT NULL,
-    available_at     TEXT NOT NULL,
-    lease_expires_at TEXT,
-    locked_by        TEXT,
-    created_at       TEXT NOT NULL,
-    started_at       TEXT,
-    finished_at      TEXT
+    id                  TEXT PRIMARY KEY,
+    task_name           TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    payload             TEXT NOT NULL,
+    result              TEXT,
+    error               TEXT,
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    max_attempts        INTEGER NOT NULL,
+    timeout_seconds     REAL NOT NULL,
+    available_at        TEXT NOT NULL,
+    lease_expires_at    TEXT,
+    locked_by           TEXT,
+    created_at          TEXT NOT NULL,
+    started_at          TEXT,
+    finished_at         TEXT,
+    cancel_requested_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_claim ON jobs (status, available_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_task_name ON jobs (task_name);
@@ -74,7 +75,18 @@ class SQLiteBackend:
                 return
             async with self._connection() as conn:
                 await conn.executescript(_SCHEMA)
+                await self._add_missing_columns(conn)
             self._initialized = True
+
+    async def _add_missing_columns(self, conn: aiosqlite.Connection) -> None:
+        # A database created by an older version of fastapi-jobs won't have columns
+        # added since -- CREATE TABLE IF NOT EXISTS above only helps fresh databases.
+        # This is a plain ALTER TABLE, not a migration framework, because that's all
+        # a single additive column needs.
+        cursor = await conn.execute("PRAGMA table_info(jobs)")
+        existing = {row[1] for row in await cursor.fetchall()}
+        if "cancel_requested_at" not in existing:
+            await conn.execute("ALTER TABLE jobs ADD COLUMN cancel_requested_at TEXT")
 
     @asynccontextmanager
     async def _connection(self) -> AsyncIterator[aiosqlite.Connection]:
@@ -256,6 +268,40 @@ class SQLiteBackend:
             )
         return cursor.rowcount > 0
 
+    async def request_cancellation(self, job_id: str) -> bool:
+        await self.initialize()
+        now = _iso(datetime.now(UTC))
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                """
+                UPDATE jobs SET cancel_requested_at = COALESCE(cancel_requested_at, ?)
+                WHERE id = ? AND status = ?
+                """,
+                (now, job_id, JobStatus.RUNNING.value),
+            )
+        return cursor.rowcount > 0
+
+    async def finalize_cancellation(self, job_id: str, worker_id: str) -> None:
+        await self.initialize()
+        now = _iso(datetime.now(UTC))
+        async with self._connection() as conn:
+            cursor = await conn.execute(
+                """
+                UPDATE jobs
+                SET status = ?, finished_at = ?, lease_expires_at = NULL, locked_by = NULL
+                WHERE id = ? AND status = ? AND locked_by = ?
+                """,
+                (
+                    JobStatus.CANCELLED.value,
+                    now,
+                    job_id,
+                    JobStatus.RUNNING.value,
+                    worker_id,
+                ),
+            )
+        if cursor.rowcount == 0:
+            await self._raise_stale_write(job_id)
+
     async def list_jobs(
         self,
         *,
@@ -314,4 +360,5 @@ class SQLiteBackend:
             created_at=_parse_iso(row["created_at"]),
             started_at=_parse_iso_opt(row["started_at"]),
             finished_at=_parse_iso_opt(row["finished_at"]),
+            cancel_requested_at=_parse_iso_opt(row["cancel_requested_at"]),
         )

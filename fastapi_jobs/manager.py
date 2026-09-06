@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 from fastapi_jobs.backends.base import JobBackend
 from fastapi_jobs.config import JobsConfig
 from fastapi_jobs.exceptions import (
-    InvalidJobStateError,
     JobAlreadyCompletedError,
     JobNotFoundError,
     JobsNotConfiguredError,
@@ -63,23 +62,28 @@ class JobManager:
         )
 
     async def cancel(self, job_id: str) -> Job:
+        """Cancel a job.
+
+        A PENDING/RETRYING job is cancelled immediately. A RUNNING job instead has
+        its cancellation flag set and is returned still RUNNING -- the worker holding
+        its lease notices the flag, cancels its local task, and the job settles into
+        CANCELLED once that unwinds. Call this again (or poll `get`) to observe that.
+        """
         job = await self.get(job_id)
         if job.status in TERMINAL_STATUSES:
             raise JobAlreadyCompletedError(
                 f"job '{job_id}' already reached a terminal state ({job.status.value})"
             )
         if job.status is JobStatus.RUNNING:
-            raise InvalidJobStateError(
-                f"job '{job_id}' is currently running; cancelling a job that's already "
-                "executing isn't supported, only jobs still waiting (PENDING/RETRYING)"
-            )
+            await self.backend.request_cancellation(job_id)
+            return await self.get(job_id)
+
         cancelled = await self.backend.cancel_job(job_id)
         if not cancelled:
             # Lost the race: a worker claimed the job between our read above and this
-            # call reaching the backend.
-            raise InvalidJobStateError(
-                f"job '{job_id}' started running before it could be cancelled"
-            )
+            # call reaching the backend. It's running now, so fall back to requesting
+            # a cooperative cancellation instead of failing outright.
+            await self.backend.request_cancellation(job_id)
         return await self.get(job_id)
 
 

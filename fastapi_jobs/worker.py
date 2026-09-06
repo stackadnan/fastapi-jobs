@@ -18,7 +18,7 @@ from fastapi_jobs.decorators import get_task
 from fastapi_jobs.exceptions import InvalidJobStateError
 from fastapi_jobs.executor import run_task
 from fastapi_jobs.manager import JobManager
-from fastapi_jobs.models import Job, RetryPolicy
+from fastapi_jobs.models import Job, JobStatus, RetryPolicy
 from fastapi_jobs.serialization import encode_result
 
 if TYPE_CHECKING:
@@ -81,6 +81,7 @@ class Worker:
         try:
             while not self._shutdown.is_set():
                 await self._claim_up_to_capacity(running)
+                await self._apply_cancellation_requests(running)
 
                 if not running:
                     await self._wait_or_shutdown(self.poll_interval)
@@ -109,6 +110,14 @@ class Worker:
             if job is None:
                 return
             running[job.id] = asyncio.create_task(self._execute(job))
+
+    async def _apply_cancellation_requests(self, running: dict[str, asyncio.Task[None]]) -> None:
+        for job_id, job_task in running.items():
+            if job_task.done():
+                continue
+            job = await self.manager.backend.get_job(job_id)
+            if job is not None and job.status is JobStatus.RUNNING and job.cancel_requested_at:
+                job_task.cancel()
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
@@ -141,6 +150,18 @@ class Worker:
         started = time.monotonic()
         try:
             result = await run_task(task, job)
+        except asyncio.CancelledError:
+            # Cooperative cancellation, requested through manager.cancel() and
+            # delivered by _apply_cancellation_requests -- not an ordinary failure,
+            # so it must never go through _handle_failure and get retried.
+            if await self._record_outcome(
+                job.id, self.manager.backend.finalize_cancellation(job.id, self.worker_id)
+            ):
+                logger.info(
+                    "job cancelled",
+                    extra={"job_id": job.id, "task_name": job.task_name},
+                )
+            raise
         except Exception as exc:
             # Deliberately broad: a task's own exception must never crash the worker
             # loop. It's captured and recorded below, not swallowed.

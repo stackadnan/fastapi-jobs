@@ -42,6 +42,23 @@ class JobBackend(Protocol):
 
     async def cancel_job(self, job_id: str) -> bool: ...
 
+    async def request_cancellation(self, job_id: str) -> bool:
+        """Flag a RUNNING job for cooperative cancellation.
+
+        Returns whether the job was actually RUNNING at the time of the call. The
+        worker that owns the job's lease is responsible for noticing the flag,
+        cancelling its local task, and calling `finalize_cancellation`.
+        """
+        ...
+
+    async def finalize_cancellation(self, job_id: str, worker_id: str) -> None:
+        """Record that a RUNNING job this worker owns was cancelled.
+
+        Uses the same lease ownership check as `complete_job`/`fail_job`: raises
+        InvalidJobStateError if `worker_id` no longer holds the lease.
+        """
+        ...
+
     async def list_jobs(
         self,
         *,

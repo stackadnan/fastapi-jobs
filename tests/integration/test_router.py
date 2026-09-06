@@ -80,7 +80,7 @@ async def test_cancel_pending_job_via_api(tmp_path: Path):
     assert resp.json()["status"] == "CANCELLED"
 
 
-async def test_cancel_running_job_via_api_returns_409(tmp_path: Path):
+async def test_cancel_running_job_via_api_requests_cancellation(tmp_path: Path):
     app, jobs = _jobs_app(tmp_path, api=True)
     client = TestClient(app)
 
@@ -92,7 +92,10 @@ async def test_cancel_running_job_via_api_returns_409(tmp_path: Path):
     await jobs.manager.backend.claim_job("worker-1", lease_buffer_seconds=30)
 
     resp = client.post(f"/jobs/{job.id}/cancel")
-    assert resp.status_code == 409
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "RUNNING"
+    assert body["cancel_requested_at"] is not None
 
 
 async def test_api_requires_an_app(tmp_path: Path):
